@@ -1,0 +1,944 @@
+##-----------------Making plots for all CIBERSORTx data-------------------##
+
+#Obtain normalized counts in TPM
+
+# Download STAR Counts
+query_TCGA1 = GDCquery(
+  project = "TCGA-PAAD",
+  data.category = "Transcriptome Profiling", # parameter enforced by GDCquery
+  experimental.strategy = "RNA-Seq",
+  workflow.type = "STAR - Counts",
+  sample.type = c("Primary Tumor"),
+  data.type = "Gene Expression Quantification")
+
+
+##Next, we need to download the files from the query
+GDCdownload(query = query_TCGA1)
+#summarzed vs not summarized is kind of important, check both
+tcga_data1 = GDCprepare(query_TCGA1,
+                       save = TRUE,
+                       summarizedExperiment = TRUE,
+                       save.filename = "paad_normal_and_tumor_Illumina_STAR_NORMALS_SUMMARIZEDEXP.rds")
+mrna2 = assay(tcga_data1, 4) # this gives you TPM unstranded 
+
+
+write.table(mrna2, "tcga_paad_normal_and_tumor_tpm_matrix_mrna.txt", sep='\t')
+
+
+as.data.frame(colData(tcga_data1)) -> coldata_tcga_data
+
+
+#lets trim this down a bit
+coldata_tcga_data %>% dplyr::select("patient", "bcr_patient_barcode",
+                                    "vital_status",
+                                    "days_to_death",
+                                    "days_to_last_follow_up",
+                                    "gender", "race","ethnicity", "ajcc_pathologic_stage", 
+                                    "tissue_or_organ_of_origin", "prior_treatment", "sample_type"
+                                    
+) -> coldata_tcga_data2
+
+
+mrna2_t <- as.data.frame(t(mrna2))
+
+
+mrna2_t$ID <- row.names(mrna2_t)
+
+
+coldata_tcga_data2$ID <- row.names(coldata_tcga_data2)
+
+
+combined_TPM_PAAD <- left_join(mrna2_t, coldata_tcga_data2, by = c("ID" = "ID"), copy = TRUE)
+row.names(combined_TPM_PAAD) <- combined_TPM_PAAD$ID
+
+# save dataframe as a csv
+write.csv(combined_TPM_PAAD, "combined_TPM_PAAD_subseted_with_clinical.csv")
+
+#add quartile annotations from DESeq2 analysis in Figure 1 to TPM dataframe
+#make a dataframe with patient ID and quartile information
+PLEC_quartiles <- combined_PAAD %>% subset("ID", "quartile")
+
+#merge the TPM dataframe with the PLEC_quartiles dataframe based on "ID"
+combined_TPM2 <- left_join(combined_TPM, PLEC_quartiles, by = "ID")
+
+###
+##
+#
+#make dataframes for each quartile so that you can deconvolute on the CIBERSORTx webpage
+# get gene/sample data for each quartile
+combined_TPM_PAAD_Q1 <- combined_TPM_PAAD[combined_TPM_PAAD$quartile == 'Q1', ]
+combined_TPM_PAAD_Q2 <- combined_TPM_PAAD[combined_TPM_PAAD$quartile == 'Q2', ]
+combined_TPM_PAAD_Q3 <- combined_TPM_PAAD[combined_TPM_PAAD$quartile == 'Q3', ]
+combined_TPM_PAAD_Q4 <- combined_TPM_PAAD[combined_TPM_PAAD$quartile == 'Q4', ]
+
+combined_TPM_PAAD_Q1 <- as.data.frame(t(combined_TPM_PAAD_Q1))
+combined_TPM_PAAD_Q2 <- as.data.frame(t(combined_TPM_PAAD_Q2))
+combined_TPM_PAAD_Q3 <- as.data.frame(t(combined_TPM_PAAD_Q3))
+combined_TPM_PAAD_Q4 <- as.data.frame(t(combined_TPM_PAAD_Q4))
+
+
+#####repeat the following steps for each quartile dataframe
+# keep all rows except the last 12
+combined_TPM_PAAD_Q1 <- slice_head(combined_TPM_PAAD_Q1, n=60660)
+write.csv(combined_TPM_PAAD_Q1, "combined_PAAD_tpm_Q1_TIMER.csv")
+
+
+## Add symbol column
+
+
+library(dplyr)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+columns(org.Hs.eg.db)
+
+#if (!require("BiocManager", quietly = TRUE))
+#install.packages("BiocManager")
+
+#BiocManager::install("AnnotationDbi")
+#ids = list of IDS
+#fromKey = key type; toKey = key type we want to convert to
+#db = the AnnotationDb object to use.
+#ifMultiple = the argument specifies what to do if one source ID maps to several target IDs:
+#should the function return an NA or simply the first of the multiple IDs?
+convertIDs <- function( ids, fromKey, toKey, db, ifMultiple=c( "putNA", "useFirst" ) ) {
+  stopifnot( inherits( db, "AnnotationDb" ) )
+  ifMultiple <- match.arg( ifMultiple )
+  suppressWarnings( selRes <- AnnotationDbi::select(
+    db, keys=ids, keytype=fromKey, columns=c(fromKey,toKey) ) )
+  if( ifMultiple == "putNA" ) {
+    duplicatedIds <- selRes[ duplicated( selRes[,1] ), 1 ]  
+    selRes <- selRes[ ! selRes[,1] %in% duplicatedIds, ] }
+  return( selRes[ match( ids, selRes[,1] ), 2 ] )
+}
+
+# add column that contains ENSEMBL ID
+combined_TPM_PAAD_Q1$ENSEMBL <- row.names(as.data.frame(combined_TPM_PAAD_Q1))
+
+# remove last two digits
+combined_TPM_PAAD_Q1$ENSEMBL<- gsub("\\..*","",combined_TPM_PAAD_Q1$ENSEMBL)
+
+# keep unique genes only
+combined_TPM_PAAD_Q1 <- as.data.frame(combined_TPM_PAAD_Q1)
+dplyr::distinct(combined_TPM_PAAD_Q1, ENSEMBL) -> Q1_distinct
+
+# make ENSEMBL column into the rownames 
+rownames(Q1_distinct) <- Q1_distinct$ENSEMBL
+
+# add SYMBOL column
+Q1_distinct$SYMBOL <- convertIDs(row.names(Q1_distinct), "ENSEMBL", "SYMBOL", org.Hs.eg.db )
+
+# use inner_join to join merge high_t2_distinct with high_t2 and retain only rows with matches
+combined_TPM_PAAD_Q1 <- inner_join(combined_TPM_PAAD_Q1, Q1_distinct)
+
+# remove NA values from SYMBOL column
+combined_TPM_PAAD_Q1 <- combined_TPM_PAAD_Q1[!is.na(combined_TPM_PAAD_Q2$SYMBOL),]
+
+## Move Symbol column to the beginning of the list and drop Ensemble ID,
+
+# getting Symbol column as first 
+combined_TPM_PAAD_Q1 <- combined_TPM_PAAD_Q2 %>% relocate(SYMBOL, .before = `TCGA-HV-A5A5-01A-11R-A26U-07`)
+
+# Drop ENSEMBLE column
+
+combined_TPM_PAAD_Q1$ENSEMBL <- NULL
+
+write.csv(combined_TPM_PAAD_Q1, "TPM_counts_PLEC_Q2_samples.csv")
+
+
+
+
+
+
+library("reshape2")
+
+all.results <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/combined_CIBERSORTx_results_all_samples.csv", row.names = 1, header = TRUE)
+#Q1.Q4 <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/CIBERSORTx_results_Q1_Q4.csv", row.names = 1, header = TRUE)
+#all.sample.Qs <- read.csv("C:/Users/roxkr/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/Quartile_Sample_names.csv", header = TRUE)
+#Q1.Q4_samples <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/Quartile1_4_Sample_names.csv", header = TRUE)
+samples.Qs.3 <- samples.Qs.2 %>% rename("ID" = "variable")
+subset <- as.factor(c("B.cells.naive", "B.cells.memory", "Plasma.cells", "CD4.naive.T.cells", "CD4.memory.resting", "CD4.memory.activated",
+            "Tregs", "T.cells.follicular.helper", "T.cells.gamma.delta", "CD8.T.cells", "Monocytes", "Macrophages.M0", "Macrophages.M1",
+            "Macrophages.M2", "Dendritic.cells.resting", "Dendritic.cells.activated", "Neutrophils", "Mast.cells.resting", "Mast.cells.activated", 
+            "Eosinophils", "NK.cells.resting", "NK.cells.activated"))
+
+
+
+
+library(tidyverse)
+
+#Need to use patient ID instead of barcode
+# Make barcodes a column
+# obtain first 12 characters
+# Make Sample column the rownames again
+# remove Sample column
+all.results <- rownames_to_column(all.results, "Sample")
+
+all.results$Sample <- substr(all.results$Sample, 1, 12)
+
+rownames(all.results) <- all.results[,1]
+all.results$Sample <- NULL
+
+### need to change IDs for the sample dataframe as well
+samples.Qs.3$ID <- substr(samples.Qs.3$ID, 1, 12)
+rownames(samples.Qs.3) <- samples.Qs.3[,2]
+samples.Qs.3 <- samples.Qs.3 %>% rename("variable" = "ID")
+
+
+## Now perform analysis
+### for all quartiles
+data.all.results <- all.results
+
+data.all.results_t <- as.data.frame(t(data.all.results))
+
+# get subset names
+data.all.results_t$subset <- row.names(data.all.results_t)
+
+data_all.results_long <- data.all.results_t
+# Converting data from wide to long format
+#data_long$subset <- as.factor(1:nrow(data_long))
+data_all.results_long <- melt(data_all.results_long, id.vars = "subset")
+
+data_all.results_long                          # Printing long data
+
+#merge Quartile annotation to data_Q1.Q4_long
+
+all_data_all.results_long <- merge(data_all.results_long, samples.Qs.3, by = "variable")
+
+##save data
+write.csv(all_data_all.results_long, "All_Qs_CIBERSORTx_results3.csv")
+
+
+
+All.Qs.relative <-read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/All_Qs_CIBERSORTx_results2.csv")
+
+
+library(car)
+library(ggplot2)
+library(dplyr)
+
+all_data_all.results_long <- all_data_all.results_long %>% rename("Quartile" = "quartile")
+
+#Box plot with two factor variables
+all.infiltrates <- ggboxplot(All.Qs.relative, x = "subset", y = "value", fill = "Quartile",
+                             palette = c("steelblue1", "maroon2", "seagreen3", "orange"), outlier.size = 0.5, lwd = 0.25) +
+  labs(title = "Immune Subset Infiltration Estimation",x = "Immune Subsets", y = "Relative Percent") +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  theme (plot.title = element_text(face = "bold", size = 12, hjust = 0.5)) + 
+  theme(axis.text.x = element_text(size = 10, face = 1)) +
+  theme(axis.text.y = element_text(size = 10, face = 1)) +
+  theme(axis.title.x = element_blank()) +
+  theme(axis.title.y = element_text(size = 10, face = "bold"))+
+  theme(axis.line = element_line(size = 0.4)) +
+  theme(legend.title = element_text(color = "black", size = 8, face = 2)) +
+  theme(legend.text = element_text(size=8)) + 
+  theme(legend.title = element_text(size=9, face = 2)) +
+  theme(legend.key.size = unit(0.4, 'cm'))
+
+all.infiltrates
+
+
+###save image
+sup.Fig1C <- all.infiltrates 
+ggsave("sup.Fig1C", plot = sup.Fig1C, width = 14, height = 12, units = "cm", device = "png", dpi = 1200)
+
+###get stats and save
+all.Qs.stats <- compare_means(value ~ Quartile, data = all_data_all.results_long, group.by = "subset")
+
+write.csv(all.Qs.stats, "all.Qs.stats.csv")
+
+
+### for plotting Q1 and Q4 only
+final_Q4.Q1_results_long <- all_data_all.results_long %>% subset(Quartile == "Q1" | Quartile == "Q4")
+
+Q4.Q1.relative <- All.Qs.relative %>% subset(Quartile == "Q1" | Quartile == "Q4")
+
+
+Q1.Q4_infiltrates <- ggboxplot(Q4.Q1.relative, x = "subset", y = "value", fill = "Quartile",
+                               palette = c("steelblue1", "orange"), outlier.size = 0.5, lwd = 0.5) + 
+  labs(title = "Immune Subset Infiltration Estimation", x = "Immune Subsets", y = "Relative Percent") +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  #theme (plot.title = element_text(face = "bold", size = 12, hjust = 0.5)) + 
+  theme(plot.title = element_blank()) +
+  theme(axis.text.x = element_text(size = 10, face = 1)) +
+  theme(axis.text.y = element_text(size = 10, face = 1)) +
+  theme(axis.title.x = element_blank()) +
+  theme(axis.title.y = element_text(size = 10, face = "bold"))+
+  theme(axis.line = element_line(size = 0.4)) +
+  theme(legend.title = element_text(color = "black", size = 8, face = 2)) +
+  theme(legend.text = element_text(size=7)) + 
+  theme(legend.title = element_text(size=8, face = 2)) +
+  theme(legend.key.size = unit(0.4, 'cm')) +
+  stat_compare_means(aes(group = Quartile), label = "p.signif", size = 4, 
+                     label.y = 0.53, hide.ns = TRUE)
+
+Q1.Q4_infiltrates
+
+###save image
+Figure2B <- Q1.Q4_infiltrates 
+ggsave("Figure2B.png", plot = Figure2B, width = 9, height = 7.7, 
+       units = "cm", device = "png", dpi = 1200, scale = 1.27)
+
+##### make stacked barplots for each quartile (relative percent)
+
+###palette used for stacked barplot
+my_palette2 <- c("lightpink", "hotpink2", "orange", "goldenrod", "springgreen2", "powderblue", 
+                 "skyblue2", "dodgerblue3", "orchid3", "plum1", "aquamarine", "violetred4",
+                 "yellow", "gold", "violetred3", "slateblue", "thistle", "mistyrose", "orangered2", 
+                 "chartreuse2","darkseagreen2", "darkolivegreen2","lightgrey")
+
+
+
+
+final_Q4_results_long <- all_data_all.results_long  %>% subset(Quartile == "Q4")
+final_Q1_results_long <- all_data_all.results_long  %>% subset(Quartile == "Q1")
+final_Q2_results_long <- all_data_all.results_long  %>% subset(Quartile == "Q2")
+final_Q3_results_long <- all_data_all.results_long  %>% subset(Quartile == "Q3")
+
+
+write.csv(final_Q1_results_long, "Q1_relative_stacked_barplot.csv")
+
+
+
+sup.Fig1A2.1 <- ggplot(final_Q3_results_long,                  # Stacked barplot using ggplot2
+       aes(x = variable,
+           y = value,
+           fill = subset)) +
+  geom_bar(stat = "identity") +
+  labs(title = "PLEC Q3 Immune Subsets ", x = "Sample", y = "Relative Percent") +
+  theme(plot.title = element_text(hjust = 0.5)) + theme (plot.title = element_text(face = "bold", size = 10)) +
+  scale_fill_manual(values = my_palette2, na.value = "grey45") + 
+  theme(axis.text.x = element_text(angle = 90, size = 4)) +
+  theme(axis.title.y = element_text(size = 9, face = "bold")) +
+  theme(axis.title.x = element_blank()) +
+  theme(axis.text.y = element_text(size = 8)) +
+  #theme(legend.position="none") 
+theme(legend.title = element_text(color = "black", size = 12, face = "bold")) +
+  theme(legend.text = element_text(size=12)) +
+  theme(legend.key.size = unit(1, 'cm'))
+
+ggsave("sup.Fig1A2.png", plot = sup.Fig1A2, width = 14, height = 8, units = "cm", 
+       device = "png", dpi = 1200, scale = 1)
+
+
+library(ggplot2)
+
+Figure2A1.2 <- ggplot(final_Q4_results_long,                  # Stacked barplot using ggplot2
+                      aes(x = variable,
+                          y = value,
+                          fill = subset)) +
+  geom_bar(stat = "identity") +
+  labs(title = "PLEC Q4 Immune Subsets ", x = "Sample", y = "Relative Percent") +
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  theme (plot.title = element_text(face = "bold", size = 24, margin = margin(t = 2))) +
+  scale_fill_manual(values = my_palette2, na.value = "grey45") + 
+  theme(axis.text.x = element_text(angle = 90, size = 8)) +
+  theme(axis.title.y = element_text(size = 20, face = "bold")) +
+  theme(axis.title.x = element_blank()) +
+  theme(axis.text.y = element_text(size = 14)) +
+  theme(legend.position="none") + 
+  theme(axis.ticks = element_line(linewidth = 0.5), axis.ticks.length  = unit(0.1, "cm"))
+  #theme(legend.title = element_text(color = "black", size = 6, face = "bold")) +
+  #theme(legend.text = element_text(size=6)) +
+  #theme(legend.key.size = unit(0.5, 'cm'))
+Figure2A1.2
+
+ggsave("Fig2A1.2.png", plot = Figure2A1.2, width = 6.35, height = 5.08, units = "cm", 
+       device = "png", dpi = 1200, scale = 2.5)
+
+
+
+####--------------------CIBERSORT-ABS Graphs----------------------------------####
+
+library("reshape2")
+
+
+
+all.results.ABS <- read.csv("C:/Users/roxkr/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/CIBERSORTx_Q1234_ABS_results.csv", row.names = 1, header = TRUE)
+#Q1.Q4.ABS <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/CIBERSORTx_Q1_Q4_ABS_results.csv", row.names = 1, header = TRUE)
+#all.sample.Qs <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/Quartile_Sample_names.csv", header = TRUE)
+#Q1.Q4_samples <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/Quartile1_4_Sample_names.csv", header = TRUE)
+
+
+all.results.ABS <- rownames_to_column(all.results.ABS, "Sample")
+
+all.results.ABS$Sample <- substr(all.results.ABS$Sample, 1, 12)
+
+rownames(all.results.ABS) <- all.results.ABS[,1]
+all.results.ABS$Sample <- NULL
+
+
+### for all quartiles
+all.Qs.ABS <- all.results.ABS
+
+all.Qs.ABS_t <- as.data.frame(t(all.Qs.ABS))
+
+# get subset names
+all.Qs.ABS_t$subset <- row.names(all.Qs.ABS_t)
+
+all.Qs.ABS_long <- all.Qs.ABS_t
+# Converting data from wide to long format
+#data_long$subset <- as.factor(1:nrow(data_long))
+all.Qs.ABS_long <- melt(all.Qs.ABS_long, id.vars = "subset")
+
+all.Qs.ABS_long                          # Printing long data
+
+#merge Quartile annotation to all.Qs.ABS_long
+
+all_data_allQs.ABS_long  <- merge(all.Qs.ABS_long, samples.Qs.3, by = "variable")
+
+write.csv(all_data_allQs.ABS_long, "All_Qs_ABS_CIBERSORTx_results2.csv")
+
+
+all.ABS <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/All_Qs_ABS_CIBERSORTx_results2.csv")
+
+#all_data_allQs.ABS_long <- all_data_allQs.ABS_long %>% rename("Quartile" = "quartile")
+
+all.Qs.ABS_infiltrates <- ggboxplot(all.ABS, x = "subset", y = "value", fill = "Quartile",
+                                    palette = c("steelblue1", "maroon2", "seagreen3", "orange"), outlier.size = 0.3, lwd = 0.25) + 
+  labs(title = "Immune Subset Infiltration Estimation", x = "Immune Subsets", y = "Absolute Score") +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  theme (plot.title = element_text(face = "bold", size = 12, hjust = 0.5)) + 
+  theme(axis.text.x = element_text(size = 10, face = 1)) +
+  theme(axis.text.y = element_text(size = 10, face = 1)) +
+  theme(axis.title.x = element_blank()) +
+  theme(axis.title.y = element_text(size = 10, face = "bold"))+
+  theme(axis.line = element_line(size = 0.4)) +
+  theme(legend.title = element_text(color = "black", size = 8, face = 2)) +
+  theme(legend.text = element_text(size=8)) + 
+  theme(legend.title = element_text(size=9, face = 2)) +
+  theme(legend.key.size = unit(0.4, 'cm'))#+
+  #scale_y_continuous(trans='log10', labels = trans_format("log10", math_format(10^.x)))
+
+all.Qs.ABS_infiltrates 
+
+####save image
+sup.Fig1C <- all.Qs.ABS_infiltrates 
+
+ggsave("sup.Fig1C.png", plot = sup.Fig1C, width = 12, height = 10, units = "cm", device = "png", dpi = 1200)
+
+
+
+####get statistics for all comparisons
+compare_means(value ~ Quartile, data = all_data_allQs.ABS_long, 
+              group.by = "subset")
+
+all.Qs.ABS.stats <- compare_means(value ~ Quartile, data = all_data_allQs.ABS_long, 
+                              group.by = "subset")
+
+write.csv(all.Qs.ABS.stats, "all.Qs.ABS.stats.csv")
+
+
+
+
+### ABS score for Q4 and Q1 only
+
+Q4.Q1.ABS <- all.ABS %>% subset(Quartile == "Q1" | Quartile == "Q4")
+Q4.Q1_ABS_subset <- Q4.Q1.ABS %>% subset(subset == "B.cells.naive" | subset == "B.cells.memory" | subset == "Plasma.cells" |
+                                          subset == "CD8.T.cells" | subset =="CD4.memory.activated" | subset == "Monocytes" |
+                                          subset == "Macrophages.M0" | subset == "Macrophages.M1" | subset == "Macrophages.M2" |
+                                          subset == "Dendritic.cells.resting" | subset == "Mast.cells.resting" | subset == "Neutrophils")
+
+
+#save file
+write.csv(Q4.Q1.ABS, "Q4_Q1_ABS_scores.csv")
+
+Q1.Q4.ABS_infiltrates <- ggboxplot(Q4.Q1.ABS, x = "subset", y = "value", fill = "Quartile",
+                                   palette = c("steelblue1", "orange"), outlier.size = 0.5, lwd = 0.5) + 
+  labs(title = "Immune Subset Infiltration Estimation", x = "Immune Subsets", y = "Absolute Score") +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  theme(plot.title = element_blank()) +
+  theme(axis.text.x = element_text(size = 10, face = 1)) +
+  theme(axis.text.y = element_text(size = 10, face = 1)) +
+  theme(axis.title.x = element_blank()) +
+  theme(axis.title.y = element_text(size = 10, face = "bold"))+
+  theme(axis.line = element_line(size = 0.4)) +
+  theme(legend.title = element_text(color = "black", size = 8, face = 2)) +
+  theme(legend.text = element_text(size=7)) + 
+  theme(legend.title = element_text(size=8, face = 2)) +
+  theme(legend.key.size = unit(0.3, 'cm')) +
+  stat_compare_means(aes(group = Quartile), label = "p.signif", size = 4, 
+                     label.y = 47.55, hide.ns = TRUE) #+
+  #scale_y_continuous(trans='log10', labels = trans_format("log10", math_format(10^.x)))
+Q1.Q4.ABS_infiltrates
+
+Figure2C <- Q1.Q4.ABS_infiltrates 
+
+ggsave("Figure2C.png", plot = Figure2C, width = 9, height = 7.7, 
+       units = "cm", device = "png", dpi = 1200, scale = 1.3)
+
+
+
+
+###------------make graphs for immune checkpoionts 
+# Figure 2E-F
+# Fig.S1
+
+bp5_CTLA4 <- as.data.frame(plotCounts(dds, gene="ENSG00000163599.17", intgroup="quartile", returnData=TRUE))
+bp5_PDL1 <- as.data.frame(plotCounts(dds, gene="ENSG00000120217.14", intgroup="quartile", returnData=TRUE))
+bp5_TIGIT <- as.data.frame(plotCounts(dds, gene="ENSG00000181847.12", intgroup="quartile", returnData=TRUE))
+bp5_LAG3 <- as.data.frame(plotCounts(dds, gene="ENSG00000089692.9", intgroup="quartile", returnData=TRUE))
+bp5_PDL2 <- as.data.frame(plotCounts(dds, gene="ENSG00000197646.8", intgroup="quartile", returnData=TRUE))
+bp5_SIGLEC15 <- as.data.frame(plotCounts(dds, gene="ENSG00000197046.12", intgroup="quartile", returnData=TRUE))
+bp5_TIM3 <- as.data.frame(plotCounts(dds, gene="ENSG00000100234.12", intgroup="quartile", returnData=TRUE))
+bp5_LGALS9 <- as.data.frame(plotCounts(dds, gene="ENSG00000168961.17", intgroup="quartile", returnData=TRUE))
+bp5_VISTA <- as.data.frame(plotCounts(dds, gene="ENSG00000107738.20",intgroup="quartile", returnData=TRUE)) 
+
+library(tidyverse)
+
+bp6_TIGIT.2 <- bp5_TIGIT
+bp6_TIGIT.2 <-  bp6_TIGIT.2 %>% rename("count" = "TIGIT") %>% rownames_to_column(var="Sample")
+
+bp6_LAG3.2 <- bp5_LAG3
+bp6_LAG3.2 <-bp6_LAG3.2 %>% rename("count" = "LAG3") %>% rownames_to_column(var="Sample")
+
+bp6_TIM3.2 <- bp5_TIM3
+bp6_TIM3.2 <-bp6_TIM3.2 %>% rename("count" = "TIM3") %>% rownames_to_column(var="Sample")
+
+bp6_LGALS9.2 <- bp5_LGALS9
+bp6_LGALS9.2 <-  bp6_LGALS9.2 %>% rename("count" = "LGALS9") %>% rownames_to_column(var="Sample")
+
+bp6_PDL1.2 <- bp5_PDL1
+bp6_PDL1.2 <-  bp6_PDL1.2 %>% rename("count" = "PD-L1") %>% rownames_to_column(var="Sample")
+
+bp6_PDL2.2 <- bp5_PDL2
+bp6_PDL2.2 <-  bp6_PDL2.2 %>% rename("count" = "PD-L2") %>% rownames_to_column(var="Sample")
+
+bp6_CTLA4.2 <- bp5_CTLA4
+bp6_CTLA4.2 <-  bp6_CTLA4.2 %>% rename("count" = "CTLA-4") %>% rownames_to_column(var="Sample")
+
+bp6_SIGLEC15.2 <- bp5_SIGLEC15
+bp6_SIGLEC15.2 <-  bp6_SIGLEC15.2 %>% rename("count" = "SIGLEC15") %>% rownames_to_column(var="Sample")
+
+bp6_VISTA.2 <- bp5_VISTA
+bp6_VISTA.2 <-  bp6_VISTA.2 %>% rename("count" = "VISTA") %>% rownames_to_column(var="Sample")
+
+
+#merge dataframes together by Sample name
+#checkpoints <- left_join(bp6_CTLA4.2, bp6_PDL1.2, by = "Sample")
+
+checkpoint_list <- list(bp6_CTLA4.2, bp6_LAG3.2, bp6_LGALS9.2, bp6_PDL1.2, bp6_PDL2.2, bp6_SIGLEC15.2,  bp6_TIGIT.2, bp6_TIM3.2, bp6_VISTA.2)
+
+
+# Merge all dataframes
+checkpoint_df <- reduce(checkpoint_list, full_join, by="Sample")
+
+# select only the columns that you need. "quartile" is repeated due to the merge
+checkpoint_df1 <- checkpoint_df %>% select("Sample", "quartile.x", "CTLA-4", "LAG3", "LGALS9", "PD-L1", "PD-L2", "SIGLEC15", "TIGIT", "TIM3", "VISTA")
+
+# rename "quartile.x" column
+checkpoint_df2 <- checkpoint_df1 %>% rename("quartile.x" = "PLEC.Group")
+
+# make a dataframe of Sample and PLEC-Group Info and Make Sample column the rownames
+samples_checkpoints <- checkpoint_df2 %>% select("Sample", "PLEC.Group")
+samples_checkpoints.1 <- samples_checkpoints %>% column_to_rownames("Sample")
+#rename "Sample" column to "variable" for downstream analysis
+samples_checkpoints.2 <- samples_checkpoints %>% rename("Sample" = "variable")
+
+# make a list of checkpoints
+Checkpoint <- c("CTLA-4", "LAG3", "LGALS9", "PD-L1", "PD-L2", "SIGLEC15", "TIGIT", "TIM3", "VISTA")
+
+# Take the "Sample" column and make it the rownames
+checkpoints_df2 <- checkpoint_df2 %>% column_to_rownames("Sample")
+#drop PLEC.Group
+checkpoints_df2$PLEC.Group <- NULL
+
+
+library(reshape2)
+### now we can make the grouped boxplots. 
+data_checkpoints <- checkpoints_df2
+
+data_checkpoints_t <- as.data.frame(t(data_checkpoints))
+
+# get subset names
+data_checkpoints_t$Checkpoint <- row.names(data_checkpoints_t)
+
+data_checkpoints_long <- data_checkpoints_t
+# Converting data from wide to long format
+#data_long$subset <- as.factor(1:nrow(data_long))
+data_checkpoints_long <- melt(data_checkpoints_long, id.vars = "Checkpoint")
+
+data_checkpoints_long                         # Printing long data
+
+#merge Quartile annotation to data_Q1.Q4_long
+
+final_checkpoints_long <- merge(samples_checkpoints.2, data_checkpoints_long, by = "variable")
+
+final_checkpoints_long <- final_checkpoints_long %>% rename("PLEC.Group" = "Quartile")
+
+library("scales")
+library("ggpubr")
+library("rstatix")
+
+bp_checkpoints <- ggboxplot(final_checkpoints_long, x = "Checkpoint", y = "value", fill = "Quartile",
+                                  palette = c("steelblue1", "maroon2", "seagreen3", "orange"), outlier.size = 0.5, lwd = 0.25) + 
+  labs(title = "PLEC High vs. Low Immune Checkpoint Expression", x = "Immune Checkpoints", y = "Normalized Count (log10)") +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  theme(plot.title = element_blank()) + 
+  theme(axis.title.x = element_blank()) +
+  theme(axis.text.x = element_text(size = 8, face = 1)) +
+  theme(axis.text.y = element_text(size = 8, face = "bold")) +
+  theme(axis.line = element_line(size = 0.6)) + 
+  theme(axis.title.y = element_text(size = 8, face = "bold")) +
+  theme(axis.line = element_line(size = 0.3)) +
+  theme(legend.text = element_text(size=6)) + 
+  theme(legend.title = element_text(size=6, face = 2)) +
+  theme(legend.key.size = unit(0.4, 'cm')) +
+  scale_y_continuous(trans='log10', labels = trans_format("log10", math_format(10^.x)))
+
+bp_checkpoints 
+
+### save plot
+sup.Fig1D <- bp_checkpoints
+
+ggsave("sup.Fig1D.png", plot = sup.Fig1D, width = 10, height = 7, units = "cm", device = "png", dpi = 1200)
+
+# look at statistics for group comparisons
+my_comparisons <- list(c("Q1", "Q2"), c("Q1", "Q3"), c("Q2", "Q3"), c("Q2", "Q4"), c("Q3", "Q4"), c("Q1", "Q4"))
+
+stat.test <- final_checkpoints_long %>%
+  group_by(Checkpoint) %>%
+  wilcox_test(value ~ Quartile)
+stat.test 
+
+# save statistics
+write.csv(stat.test, "Checkpoints_all_quartiles_statistics.csv")
+
+
+### grouped boxplot for Q1 and Q4 only
+
+final_Q4.Q1_checkpoints_long <- final_checkpoints_long %>% subset(Quartile == "Q1" | Quartile == "Q4")
+
+final_Q4.Q1_checkpoints_long <- final_Q4.Q1_checkpoints_long %>% rename("PLEC.Group" = "Quartile")
+
+bp_Q4.Q1_checkpoints <- ggboxplot(final_Q4.Q1_checkpoints_long, x = "Checkpoint", y = "value", fill = "Quartile",
+                            palette = c("steelblue1",  "orange"), outlier.size = 1, lwd = 0.75) + 
+  labs(title = "PLEC High vs. Low Immune Checkpoint Expression", x = "Immune Checkpoints", y = "Normalized Count (log10)") +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  theme (plot.title = element_text(face = "bold", size = 8)) + 
+  theme(axis.text.x = element_text(size = 16, face = 1)) +
+  theme(axis.text.y = element_text(size = 16, face = "bold")) +
+  theme(plot.title = element_text(hjust=0.5)) +
+  theme(axis.line = element_line(size = 0.3)) +
+  theme(axis.title.y = element_text(size = 18, face = "bold")) +
+  scale_y_continuous(trans='log10', labels = trans_format("log10", math_format(10^.x))) +
+  theme(plot.title = element_blank())+
+  theme(axis.title.x = element_blank())+
+  stat_compare_means(aes(group = Quartile), label = "p.signif", label.x = 1.5, size = 7, label.y = 5, hide.ns = TRUE) +
+  theme(legend.text = element_text(size=12)) + 
+  theme(legend.title = element_text(size=12, face = 2)) +
+  theme(legend.key.size = unit(1, 'cm'))
+
+bp_Q4.Q1_checkpoints #+ stat_compare_means(aes(group = Quartile), label = "p.signif", label.y = 130000)
+
+### save plot
+Figure2D <- bp_Q4.Q1_checkpoints
+ggsave("Figure2D.png", plot = Figure2D, width = 8.599424, height = 5.377434, units = "cm", 
+       device = "png", dpi = 1200, scale = 2.5)
+dev.off()
+
+
+#####look at HLA expression 
+
+HLA.DMA <- as.data.frame(plotCounts(dds, gene="ENSG00000204257.15", intgroup="quartile", returnData=TRUE))
+HLA.DRA <- as.data.frame(plotCounts(dds, gene="ENSG00000204287.14", intgroup="quartile", returnData=TRUE))
+HLA.DPB1 <- as.data.frame(plotCounts(dds, gene="ENSG00000223865.11", intgroup="quartile", returnData=TRUE))
+HLA.DPA1 <- as.data.frame(plotCounts(dds, gene="ENSG00000231389.7", intgroup="quartile", returnData=TRUE))
+HLA.DQB2 <- as.data.frame(plotCounts(dds, gene="ENSG00000232629.9", intgroup="quartile", returnData=TRUE))
+HLA.DOB <- as.data.frame(plotCounts(dds, gene="ENSG00000241106.8", intgroup="quartile", returnData=TRUE))
+HLA.DMB <- as.data.frame(plotCounts(dds, gene="ENSG00000242574.9", intgroup="quartile", returnData=TRUE))
+HLA.DOA <- as.data.frame(plotCounts(dds, gene="ENSG00000204252.14", intgroup="quartile", returnData=TRUE))
+HLA.DQA1 <- as.data.frame(plotCounts(dds, gene="ENSG00000196735.13", intgroup="quartile", returnData=TRUE))
+
+
+
+library(tidyverse)
+
+HLA.DMA.2 <- HLA.DMA
+HLA.DMA.2 <-  HLA.DMA.2 %>% rename("count" = "HLA-DMA") %>% rownames_to_column(var="Sample")
+
+HLA.DMB.2 <- HLA.DMB
+HLA.DMB.2 <-  HLA.DMB.2 %>% rename("count" = "HLA-DMB") %>% rownames_to_column(var="Sample")
+
+HLA.DOA.2 <- HLA.DOA
+HLA.DOA.2 <- HLA.DOA.2 %>% rename("count" = "HLA-DOA") %>% rownames_to_column(var="Sample")
+
+HLA.DOB.2 <- HLA.DOB
+HLA.DOB.2 <-  HLA.DOB.2 %>% rename("count" = "HLA-DOB") %>% rownames_to_column(var="Sample")
+
+HLA.DPA1.2 <- HLA.DPA1
+HLA.DPA1.2 <-  HLA.DPA1.2 %>% rename("count" = "HLA-DPA1") %>% rownames_to_column(var="Sample")
+
+HLA.DPB1.2 <- HLA.DPB1
+HLA.DPB1.2 <-  HLA.DPB1.2 %>% rename("count" = "HLA-DPB1") %>% rownames_to_column(var="Sample")
+
+HLA.DQA1.2 <- HLA.DQA1
+HLA.DQA1.2 <-  HLA.DQA1.2 %>% rename("count" = "HLA-DQA1") %>% rownames_to_column(var="Sample")
+
+HLA.DQB2.2 <- HLA.DQB2
+HLA.DQB2.2 <-  HLA.DQB2.2 %>% rename("count" = "HLA-DQB2") %>% rownames_to_column(var="Sample")
+
+HLA.DRA.2 <- HLA.DRA
+HLA.DRA.2 <-  HLA.DRA.2 %>% rename("count" = "HLA-DRA") %>% rownames_to_column(var="Sample")
+
+
+
+#merge dataframes together by Sample name
+HLA_list <- list(HLA.DMA.2, HLA.DMB.2, HLA.DOA.2, HLA.DOB.2, HLA.DPA1.2, HLA.DPB1.2,  HLA.DQA1.2, HLA.DQB2.2, HLA.DRA.2)
+
+# Merge all dataframes
+HLA_df <- reduce(HLA_list, full_join, by="Sample")
+# select only the columns that you need. "quartile" is repeated due to the merge
+HLA_df1 <- HLA_df %>% select("Sample", "quartile.x", "HLA-DMA", "HLA-DMB", "HLA-DOA", "HLA-DOB", "HLA-DPA1", "HLA-DPB1", "HLA-DQA1", "HLA-DQB2", "HLA-DRA")
+
+# make a dataquartiles.y.y.y#make a dataframe of sample and quartile data
+HLA_df2 <- HLA_df2 %>% rename("PLEC.Group" = "Quartile")
+# make a dataframe of Sample and PLEC-Group Info and Make Sample column the rownames
+samples_HLA <- HLA_df2 %>% select("Sample", "Quartile")
+samples_HLA.1 <- samples_HLA %>% column_to_rownames("Sample")
+samples_HLA.2 <- samples_HLA %>% rename("Sample" = "variable")
+
+# make a list of checkpoints
+HLA <- c( "HLA-DMA", "HLA-DMB", "HLA-DOA", "HLA-DOB", "HLA-DPA1", "HLA-DPB1", "HLA-DQA1", "HLA-DQB2", "HLA-DRA")
+
+# Sample column the rownames
+all_HLA.1 <- HLA_df2 %>% column_to_rownames("Sample")
+# drop PLEC-Group
+all_HLA.1$Quartile <- NULL
+
+
+library(reshape2)
+### make grouped boxplots for first and fourth quartiles
+data_HLA <- all_HLA.1
+
+data_HLA_t <- as.data.frame(t(data_HLA))
+
+# get subset names
+data_HLA_t$HLA <- row.names(data_HLA_t)
+
+data_HLA_long <- data_HLA_t
+# Converting data from wide to long format
+# data_long$subset <- as.factor(1:nrow(data_long))
+data_HLA_long <- melt(data_HLA_long, id.vars = "HLA")
+
+data_HLA_long                         # Printing long data
+
+# merge Quartile annotation to data_Q1.Q4_long
+final_HLAs_data_long <- merge(samples_HLA.2, data_HLA_long, by = "variable")
+
+library("scales")
+
+bp_HLA <- ggboxplot(final_HLAs_data_long, x = "HLA", y = "value", fill = "Quartile",
+                          palette = c("steelblue1", "maroon2", "seagreen3", "orange"), outlier.size = 0.5, lwd = 0.25) + 
+  labs(title = "PLEC High vs. Low HLA Expression", x = "HLA-Genes", y = "Normalized Count (log10)") +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  theme(plot.title = element_blank()) + 
+  theme(axis.title.x = element_blank()) +
+  theme(axis.text.x = element_text(size = 8, face = 1)) +
+  theme(axis.text.y = element_text(size = 8, face = "bold")) +
+  theme(axis.line = element_line(size = 0.6)) + 
+  theme(axis.title.y = element_text(size = 8, face = "bold")) +
+  theme(axis.line = element_line(size = 0.3)) +
+  theme(legend.text = element_text(size=6)) + 
+  theme(legend.title = element_text(size=6, face = 2)) +
+  theme(legend.key.size = unit(0.4, 'cm')) +
+  scale_y_continuous(trans='log10', labels = trans_format("log10", math_format(10^.x)))
+
+bp_HLA 
+
+###save graphs
+sup.Fig1E <- bp_HLA
+ggsave("sup.Fig1E.png", plot = sup.Fig1E, width = 7.62, height = 5.08, units = "cm", 
+       device = "png", dpi = 1200, scale = 2.75)
+dev.off()
+
+###check stats for all comparisons
+my_comparisons <- list(c("Q1", "Q2"), c("Q1", "Q3"), c("Q2", "Q3"), c("Q2", "Q4"), c("Q3", "Q4"), c("Q1", "Q4"))
+
+stat.test <- final_HLAs_data_long %>%
+  group_by(HLA) %>%
+  wilcox_test(value ~ Quartile)
+stat.test 
+
+# save statistics for group comparisons
+write.csv(stat.test, "HLA_all_quartiles_statistics.csv")
+
+
+#### make grouped boxplots for Q1 and Q4 HLA expression only
+final_Q4.Q1_HLA_long <- final_HLAs_data_long %>% subset(Quartile == "Q1" | Quartile == "Q4")
+
+library("scales")
+
+bp_Q1.Q4_HLA <- ggboxplot(final_Q4.Q1_HLA_long, x = "HLA", y = "value", fill = "Quartile",
+                          palette = c("steelblue1", "orange"),outlier.size = 1, lwd = 0.75) + 
+  labs(title = "PLEC High vs. Low HLA Expression", x = "HLA-Genes", y = "Normalized Count (log10)") +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  theme (plot.title = element_text(face = "bold", size = 8)) + 
+  theme(axis.text.x = element_text(size = 16, face = 1)) +
+  theme(axis.text.y = element_text(size = 16, face = "bold")) +
+  theme(plot.title = element_text(hjust=0.5)) +
+  theme(axis.line = element_line(size = 0.3)) +
+  theme(axis.title.y = element_text(size = 18, face = "bold")) +
+  scale_y_continuous(trans='log10', labels = trans_format("log10", math_format(10^.x))) +
+  theme(plot.title = element_blank())+
+  theme(axis.title.x = element_blank())+
+  stat_compare_means(aes(group = Quartile), label = "p.signif", label.x = 1.5, size = 7, label.y = 5.1, hide.ns = TRUE) +
+  theme(legend.text = element_text(size=12)) + 
+  theme(legend.title = element_text(size=12, face = 2)) +
+  theme(legend.key.size = unit(1, 'cm'))
+
+bp_Q1.Q4_HLA #+ stat_compare_means(aes(group = Quartile), label = "p.signif", label.y = 130000)
+
+# save figure
+Figure2E <- bp_Q1.Q4_HLA
+ggsave("Figure2E.png", plot = Figure2E, width = 7.62, height = 5.08, units = "cm", 
+       device = "png", dpi = 1200, scale = 2.75)
+dev.off()
+
+
+
+#######-------------------------------Mutational Analysis ---------------------------------######
+
+ this is the second way to obtain mutational data from TCGA
+# it also allows you to get all of the patient data
+library(TCGAmutations) 
+library(maftools)
+library(R.utils)
+
+tcga_avail = tcgaAvailable()
+paad1_mc3 = tcgaLoad(study = "PAAD")
+#Loading PAAD. Please cite: https://doi.org/10.1016/j.cels.2018.03.002 for reference
+
+paad1_mc3
+
+#Shows sample summary.
+getSampleSummary(paad1_mc3)
+#Shows gene summary.
+getGeneSummary(paad1_mc3)
+#shows clinical data associated with samples
+# these are PLEC high samples
+getClinicalData(paad1_mc3)
+#Shows all fields in MAF
+getFields(paad1_mc3)
+
+
+##--------------------------------subsetting MAF -----------------------------------------##
+
+# here I subseted the maf object by patient samples with high or low plectin
+# the barcodes from the RNAseq file and mutation files are not the same except for the first 10 letters/numbers
+
+
+#### obtain quartile, ID, and patient sample ID from combined_PAAD3 
+samples_for_maf <- combined_PAAD3 %>% dplyr::select("ID", "patient", "quartile")
+
+#obtain list of patient samples from maf summary
+
+Barcode_from_maf <- as.data.frame(unique(paad1_mc3@data$Tumor_Sample_Barcode))
+Barcode_from_maf <- Barcode_from_maf %>% rename("unique(paad1_mc3@data$Tumor_Sample_Barcode)" = "Tumor_Sample_Barcode")
+
+# obtain first 12 characters---this is the Tumor_Sample_Barcode_min that matches the patient ID from combined_PAAD3
+Barcode_from_maf$Tumor_Sample_Barcode_min <- substr(Barcode_from_maf$Tumor_Sample_Barcode, 1, 12)
+
+samples_from_maf <- Barcode_from_maf %>% rename("Tumor_Sample_Barcode_min" = "patient")
+
+# merge samples_for_maf and samples_from_maf by the column patient 
+# get rid of patient names that do not match by using inner_join
+
+samples_maf <- inner_join(samples_for_maf, samples_from_maf, by = "patient")
+
+# obtain Q4 and Q1 patient IDs
+paad_plec_Q4 <- samples_maf %>% subset(quartile == "Q4") %>% select("Tumor_Sample_Barcode")
+paad_plec_Q1 <- samples_maf %>% subset(quartile == "Q1") %>% select("Tumor_Sample_Barcode")
+  
+#make a list of barcodes
+paad_plec_Q4.1 <- as.vector(paad_plec_Q4$Tumor_Sample_Barcode)
+paad_plec_Q4.1
+paad_plec_Q4.1 <- subsetMaf(maf = paad1_mc3, tsb = c("TCGA-IB-A6UG-01A-32D-A33T-08", "TCGA-3A-A9IU-01A-11D-A397-08", "TCGA-FB-A545-01A-11D-A26I-08", "TCGA-HV-A5A3-01A-11D-A26I-08",
+                    "TCGA-HV-AA8V-01A-11D-A40W-08", "TCGA-M8-A5N4-01A-11D-A26I-08", "TCGA-IB-AAUN-01A-12D-A38G-08", "TCGA-2L-AAQA-01A-21D-A38G-08",
+                    "TCGA-2J-AABE-01A-12D-A40W-08", "TCGA-IB-A6UF-01A-23D-A33T-08", "TCGA-YH-A8SY-01A-11D-A377-08", "TCGA-HZ-A4BH-01A-11D-A26I-08",
+                    "TCGA-F2-A7TX-01A-33D-A38G-08", "TCGA-HZ-8005-01A-11D-2201-08", "TCGA-HV-A5A6-01A-11D-A26I-08", "TCGA-IB-7890-01A-12D-2201-08",
+                    "TCGA-2J-AABI-01A-12D-A40W-08", "TCGA-IB-A5SS-01A-11D-A32N-08", "TCGA-S4-A8RO-01A-12D-A377-08", "TCGA-XD-AAUL-01A-21D-A397-08",
+                    "TCGA-HZ-8636-01A-21D-2396-08", "TCGA-US-A77G-01A-11D-A32N-08", "TCGA-2J-AABU-01A-11D-A40W-08", "TCGA-F2-6879-01A-11D-2154-08",
+                    "TCGA-H6-8124-01A-11D-2396-08", "TCGA-2J-AABH-01A-21D-A40W-08", "TCGA-FB-AAQ0-01A-31D-A40W-08", "TCGA-HZ-7289-01A-11D-2154-08",
+                     "TCGA-IB-A7LX-01A-12D-A36O-08", "TCGA-IB-A7M4-01A-11D-A36O-08", "TCGA-US-A779-01A-11D-A32N-08", "TCGA-2L-AAQE-01A-11D-A397-08",
+                    "TCGA-FB-A78T-01A-12D-A32N-08", "TCGA-HZ-A49I-01A-12D-A26I-08", "TCGA-IB-8127-01A-11D-2396-08", "TCGA-3A-A9IH-01A-12D-A397-08",
+                    "TCGA-S4-A8RP-01A-11D-A36O-08", "TCGA-HZ-A77O-01A-11D-A33T-08", "TCGA-FB-AAQ2-01A-31D-A40W-08", "TCGA-HZ-A9TJ-01A-11D-A40W-08",
+                    "TCGA-HZ-A9TJ-06A-11D-A40W-08", "TCGA-2J-AAB6-01A-11D-A40W-08", "TCGA-2J-AAB9-01A-11D-A40W-08", "TCGA-OE-A75W-01A-12D-A32N-08",
+                    "TCGA-XN-A8T3-01A-11D-A36O-08"), mafObj = FALSE)
+
+
+paad_plec_Q1.1 <- as.vector(paad_plec_Q1$Tumor_Sample_Barcode)
+paad_plec_Q1.1
+paad_plec_Q1.1 <- subsetMaf(maf = paad1_mc3, tsb = c("TCGA-IB-7897-01A-21D-2201-08", "TCGA-HZ-8638-01A-11D-2396-08", "TCGA-3A-A9IJ-01A-11D-A397-08", "TCGA-HZ-8637-01A-11D-2396-08",
+                                                     "TCGA-IB-7888-01A-11D-2154-08", "TCGA-2L-AAQM-01A-11D-A397-08", "TCGA-IB-7889-01A-11D-2154-08", "TCGA-Z5-AAPL-01A-12D-A40W-08",
+                                                     "TCGA-HZ-8001-01A-11D-2201-08", "TCGA-HZ-8003-01A-21D-2201-08", "TCGA-HZ-A77P-01A-11D-A33T-08", "TCGA-HZ-7920-01A-11D-2201-08",
+                                                     "TCGA-3A-A9IL-01A-11D-A38G-08", "TCGA-HZ-7918-01A-11D-2154-08", "TCGA-HZ-A49H-01A-11D-A26I-08", "TCGA-2J-AABV-01A-12D-A40W-08",
+                                                     "TCGA-IB-7651-01A-11D-2154-08", "TCGA-3A-A9IS-01A-21D-A397-08", "TCGA-HZ-7924-01A-11D-2154-08", "TCGA-2J-AABP-01A-11D-A40W-08",
+                                                     "TCGA-3A-A9IX-01A-11D-A40W-08", "TCGA-HZ-8317-01A-11D-2396-08", "TCGA-3E-AAAY-01A-11D-A38G-08", "TCGA-3A-A9I5-01A-11D-A38G-08",
+                                                     "TCGA-IB-7646-01A-11D-2154-08", "TCGA-3A-A9IN-01A-11D-A397-08", "TCGA-3A-A9IV-01A-11D-A40W-08", "TCGA-3A-A9IR-01A-11D-A38G-08",
+                                                     "TCGA-3A-A9IO-01A-11D-A38G-08", "TCGA-2J-AABK-01A-31D-A40W-08", "TCGA-IB-AAUM-01A-11D-A377-08", "TCGA-IB-8126-01A-11D-2396-08",
+                                                     "TCGA-HZ-8002-01A-11D-2201-08", "TCGA-FB-AAQ3-01A-11D-A40W-08", "TCGA-IB-7645-01A-22D-2201-08", "TCGA-XD-AAUH-01A-42D-A40W-08",
+                                                     "TCGA-IB-7649-01A-11D-2154-08"), mafObj = FALSE)
+
+#subset original maf based on Tumor_Sample_Barcode
+paad_plec_Q4_maf <- maftools::read.maf(maf = paad_plec_Q4.1)
+#-Validating
+#-Silent variants: 955 
+#-Summarizing
+#--Possible FLAGS among top ten genes:
+#  TTN
+#-Processing clinical data
+#--Missing clinical data
+#-Finished in 0.090s elapsed (0.030s cpu)   
+
+                          
+paad_plec_Q1_maf <- maftools::read.maf(maf = paad_plec_Q1.1)
+#-Validating
+#-Silent variants: 7959 
+#-Summarizing
+#--Possible FLAGS among top ten genes:
+#  TTN
+#  SYNE2
+#-Processing clinical data
+#--Missing clinical data
+#-Finished in 0.440s elapsed (0.300s cpu)
+
+
+
+## customize plot colors
+#One can use any colors, here in this example color palette from RColorBrewer package is used
+vc_cols = RColorBrewer::brewer.pal(n = 8, name = 'Paired')
+names(vc_cols) = c(
+  'Frame_Shift_Del',
+  'Missense_Mutation',
+  'Nonsense_Mutation',
+  'Multi_Hit',
+  'Frame_Shift_Ins',
+  'In_Frame_Ins',
+  'Splice_Site',
+  'In_Frame_Del'
+)
+
+
+####------visualizations for plec high and plec low samples 
+
+# plot the maf Summary
+plotmafSummary(maf = paad_plec_Q4_maf, rmOutlier = TRUE, color = vc_cols, addStat = 'median', dashboard = TRUE, titvRaw = FALSE)
+
+# create an oncoplot
+oncoplot(maf = paad_plec_Q4_maf, color = vc_cols, top = 10)
+
+###save oncoplot as PNG with dpi of 1200 for Quartile 4
+oncoplot(maf = paad_plec_Q4_maf, color = vc_cols, top = 10)
+
+png("Figure2G.1.oncoplot4.png", width = 12, height = 8.5, units = "cm", res = 1200)
+oncoplot(maf = paad_plec_Q4_maf, color = vc_cols, top = 10)
+dev.off()
+
+###save oncoplot as PNG with dpi of 1200 for Quartile 1
+oncoplot(maf = paad_plec_Q1_maf, color = vc_cols, top = 10)
+
+png("Figure2F.oncoplot1.png", width = 12, height = 8.5, units = "cm", res = 1200)
+oncoplot(maf = paad_plec_Q1_maf, color = vc_cols, top = 10)
+dev.off()
+
+head(vc_cols)
