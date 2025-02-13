@@ -1,0 +1,499 @@
+## Load packages
+
+library(RColorBrewer)
+library(gProfileR)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(ggpubr)
+library(TCGAbiolinks)
+library(SummarizedExperiment)
+library(survival)
+library(survminer)
+library(limma)
+library(edgeR)
+library(DESeq2)
+
+##load data from tcgabiolinks
+
+GDCprojects = getGDCprojects()
+#https://docs.gdc.cancer.gov/Data_Portal/Users_Guide/Projects/
+
+##---------------------------------obtain clinical data---------------------------------------##
+## if you need extended clinical data this has the various
+
+
+query <- GDCquery(project = "TCGA-PAAD",
+                  data.category = "Clinical",
+                  data.type = "Clinical Supplement",
+                  data.format = "BCR Biotab")
+GDCdownload(query)
+clinical.BCRtab.all <- GDCprepare(query)
+
+
+names(clinical.BCRtab.all)
+#[1] "clinical_drug_paad"               "clinical_patient_paad"            "clinical_omf_v4.0_paad"           "clinical_follow_up_v4.4_paad"    
+#[5] "clinical_nte_paad"                "clinical_radiation_paad"          "clinical_follow_up_v4.4_nte_paad"
+
+##update this with whatever clinical data you want from the last command:
+clinical.BCRtab.all$clinical_drug_paad  %>%
+  
+  as.data.frame ->clinical
+##---------------------------------------------------------------------------------------------##
+
+
+# Download STAR Counts
+query_TCGA = GDCquery(
+  project = "TCGA-PAAD",
+  data.category = "Transcriptome Profiling", # parameter enforced by GDCquery
+  experimental.strategy = "RNA-Seq",
+  workflow.type = "STAR - Counts",
+  sample.type = c("Primary Tumor"),
+  data.type = "Gene Expression Quantification")
+
+
+##Next, we need to download the files from the query
+GDCdownload(query = query_TCGA)
+#summarzed vs not summarized is kind of important, check both
+tcga_data = GDCprepare(query_TCGA,
+                       save = TRUE,
+                       summarizedExperiment = TRUE,
+                       save.filename = "paad_Illumina_STAR_NORMALS_SUMMARIZEDEXP.rds")
+mrna = assay(tcga_data) #raw counts
+write.table(mrna, "tcga_paad_count_matrix_mrna.txt", sep='\t')
+
+as.data.frame(colData(tcga_data)) -> coldata_tcga_data
+
+
+#get patient info that you are most interested in
+coldata_tcga_data %>% dplyr::select("patient", "bcr_patient_barcode",
+                                    "vital_status",
+                                    "days_to_death",
+                                    "days_to_last_follow_up",
+                                    "gender", "race","ethnicity", "ajcc_pathologic_stage", "ajcc_pathologic_t", 
+                                    "ajcc_pathologic_n", "ajcc_pathologic_m", "age_at_index"
+                                    
+) -> coldata_tcga_data2
+
+
+mrna_t <- as.data.frame(t(mrna))
+mrna_t$ID <- row.names(mrna_t)
+
+coldata_tcga_data2$ID <- row.names(coldata_tcga_data2)
+
+
+combined_PAAD <- left_join(mrna_t, coldata_tcga_data2, by = c("ID" = "ID"), copy = TRUE)
+head(combined_PAAD)
+
+#make rownames the patient ID
+row.names(combined_PAAD) <- combined_PAAD$ID
+
+
+write.csv(combined_PAAD, "TCGA_PAAD-subseted_with_clinical.csv")
+
+###-------------------------Use DESeq2 to get Normalized Count Data----------------------------###
+
+library(DESeq2)
+
+#make a samples dataframe 
+#here, we are looking at the gene PLEC (ENSG00000178209.16)
+samples <- combined_PAAD %>% dplyr::select(ENSG00000178209.16)
+
+ddsMat <- DESeqDataSetFromMatrix(countData = mrna,
+                                 colData = samples,
+                                 design = ~1)
+dds <- ddsMat
+
+##remove low counts (removing 10 here)
+keep <- rowSums(counts(dds) >= 10) >= 22
+dds <- dds[keep,]
+
+
+##use intercept as reference
+dds$quartiles <- relevel(dds$quartiles, ref = 1)
+dds <- DESeq(dds)
+res <- results(dds, )
+summary(res)
+
+#variance stabilize
+vsd <- vst(dds, blind=FALSE)
+
+resultsNames(dds)
+
+#perform log fold change shrinkage
+#Here we are using apeglm
+resLFC <- lfcShrink(dds, coef=1, type="apeglm")
+#using 'apeglm' for LFC shrinkage. If used in published research, please cite:
+#Zhu, A., Ibrahim, J.G., Love, M.I. (2018) Heavy-tailed prior distributions for
+#sequence count data: removing the noise and preserving large differences.
+#Bioinformatics. https://doi.org/10.1093/bioinformatics/bty895
+
+#save original
+resOHT <- res
+# SmallestPvalue
+idx <- which.min(res$pvalue)
+counts(dds)[idx, ]
+counts(dds, normalized=TRUE)[idx, ]
+
+##------Once we get normalized counts, we want to split PLEC counts into quartiles
+
+counts_df <- as.data.frame(counts(dds, normalized = TRUE))
+
+PLEC_counts_df <- counts_df[rownames(counts_df) == "ENSG00000178209.16", , drop = FALSE]
+
+# Transpose the dataframe so that samples are rows and counts are columns
+PLEC_counts_df <- t(PLEC_counts_df)
+
+# Convert it back to a dataframe with sample IDs as rownames
+PLEC_counts_df <- as.data.frame(PLEC_counts_df)
+
+# Add sample IDs as rownames
+rownames(PLEC_counts_df) <- colnames(counts_df)
+
+# Calculate the quartiles (including the min and max values)
+breaks <- quantile(PLEC_counts_df$ENSG00000178209.16, probs = c(0, 0.25, 0.5, 0.75, 1))
+
+# Create a new column 'Quartile' in the dataframe that assigns quartile based on these breaks
+PLEC_counts_df$quartile <- cut(PLEC_counts_df$ENSG00000178209.16, breaks = breaks, include.lowest = TRUE, labels = c("Q1", "Q2", "Q3", "Q4"))
+
+
+# create the boxplots in Figure 1A
+library(scales)
+bp <- ggplot(PLEC_counts_df, aes(x=quartile, y=ENSG00000178209.16, fill=quartile)) + 
+  geom_boxplot() + theme_classic() + labs(x = "PLEC Quartile", y = "Normalized Count") + 
+  theme(plot.title = element_text(hjust = 0.5)) + theme (plot.title = element_text(face = "bold", size = 10)) + 
+  theme(axis.title = element_text(size = 12, face = "bold")) + 
+  theme(axis.title.x = element_text(size = 9, face = 2), axis.title.y = element_text(size = 9, face = 2)) + 
+  theme(axis.line = element_line(size = 0.5)) + 
+  theme(axis.text.x = element_text(size=8, face = 1, color = "gray10"),axis.text.y = element_text(size = 8, face = 1, color = "gray10")) +
+  scale_fill_manual(values=c("steelblue1", "maroon2", "seagreen3", "orange")) + 
+  theme(legend.position="none")+ stat_boxplot(geom = 'errorbar', width = 0.3)
+
+bp
+###save image
+Figure1A <- bp
+ggsave("Figure1A.png", plot = Figure1A, width = 5.5, height = 4.5, units = "cm", device = "png", dpi = 1200, scale = 1.5)
+dev.off()
+
+##### volcano plot
+
+library(ggplot2)
+library(ggrepel)
+library(EnhancedVolcano)
+volcano_Q4.Q1 <- EnhancedVolcano(resLFC.Q4.1,
+                lab = resLFC.Q4.1$symbol,
+                x = 'log2FoldChange',
+                y = 'pvalue',
+                xlim = c(-8, 8),
+                ylim = c(0, 45),
+                title = NULL,
+                subtitle = NULL,
+                pCutoff = 10e-4,
+                FCcutoff = 2,
+                cutoffLineType = 'twodash',
+                cutoffLineWidth = 0.6,
+                pointSize = 1.0,
+                labSize = 0,
+                #selectLab = NA,
+                col=c('black', 'gray', 'steelblue1', 'orange'),
+                colAlpha = 1,
+                axisLabSize = 18,
+                #legendLabSize = 10,
+                #legendIconSize = 3,
+                legendPosition = 'none',
+                borderWidth = 1) 
+volcano_Q4.Q1
+
+# save plot
+Figure1B <- volcano_Q4.Q1
+ggsave("Figure1B.png", plot = Figure1B, width = 8, height = 7, units = "cm", device = "png", dpi = 1200, scale = 2)
+dev.off()
+
+
+
+  
+###----------------- Gene Set Enrichment Analysis using Cluster Profiler-------------------------------###
+#Figure 1C-D
+  
+library(dplyr)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+columns(org.Hs.eg.db)
+
+
+
+#ids = list of IDS
+#fromKey = key type; toKey = key type we want to convert to
+#db = the AnnotationDb object to use.
+#ifMultiple = the argument specifies what to do if one source ID maps to several target IDs:
+#should the function return an NA or simply the first of the multiple IDs?
+convertIDs <- function( ids, fromKey, toKey, db, ifMultiple=c( "putNA", "useFirst" ) ) {
+  stopifnot( inherits( db, "AnnotationDb" ) )
+  ifMultiple <- match.arg( ifMultiple )
+  suppressWarnings( selRes <- AnnotationDbi::select(
+    db, keys=ids, keytype=fromKey, columns=c(fromKey,toKey) ) )
+  if( ifMultiple == "putNA" ) {
+    duplicatedIds <- selRes[ duplicated( selRes[,1] ), 1 ]  
+    selRes <- selRes[ ! selRes[,1] %in% duplicatedIds, ] }
+  return( selRes[ match( ids, selRes[,1] ), 2 ] )
+}
+
+
+##Q4 vs. Q1
+resLFC.Q4.1$ENSEMBL <- row.names(as.data.frame(resLFC.Q4.1))
+
+#resLFC.Q4.1.2 <- resLFC2
+#resLFC.Q4.1.2$ENSEMBL <- row.names(as.data.frame(resLFC.Q4.1))
+
+# #!isUnique(mrna$ENSEMBL) -> nonunique
+resLFC.Q4.1$ENSEMBL<- gsub("\\..*","",resLFC.Q4.1$ENSEMBL)
+# #!isUnique(mrna$ENSEMBL) -> nonunique
+#as.data.frame(resLFC.Q2.)
+row.names(resLFC.Q4.1) <- resLFC.Q4.1$ENSEMBL
+resLFC.Q4.1$symbol <- convertIDs( row.names(resLFC.Q4.1), "ENSEMBL", "SYMBOL", org.Hs.eg.db )
+resLFC.Q4.1$entrezid <- convertIDs( row.names(resLFC.Q4.1), "ENSEMBL", "ENTREZID", org.Hs.eg.db )
+head(resLFC.Q4.1, 4)
+
+
+# set up genes for clusterprofiler analysis
+res.final.Q4.1 <- as.data.frame(resLFC.Q4.1) %>% 
+  dplyr::select(symbol, log2FoldChange, entrezid, ENSEMBL) %>% 
+  na.omit() %>% 
+  distinct() %>%
+  arrange(desc(log2FoldChange))
+
+resSig.Q4.1 <- as.data.frame(resLFC.Q4.1) %>% 
+  dplyr::select(symbol, log2FoldChange, entrezid, ENSEMBL, padj) %>% 
+  na.omit() %>% 
+  distinct() %>%
+  filter(padj < 0.1) %>%
+  filter(log2FoldChange > 1 | log2FoldChange < -1) %>%
+  arrange(desc(log2FoldChange))
+head(resSig.Q4.1)
+head(res.final.Q4.1)
+
+
+
+library(tibble)
+# ranks <- deframe(res4)
+# head(ranks, 20)
+# summary(res4)
+library(clusterProfiler)
+library(wordcloud)
+organism = "org.Hs.eg.db"
+#BiocManager::install(organism, character.only = TRUE)
+library(organism, character.only = TRUE)
+library(ggplot2)
+library(enrichplot)
+library(dplyr)
+library(cowplot)
+
+
+## create gene list
+
+ ####### for Q4 vs. Q1
+genelist_ensembl.Q4.1 <- res.final.Q4.1$log2FoldChange
+genelist_entrezid.Q4.1 <- res.final.Q4.1$log2FoldChange
+genelist_symbol.Q4.1 <- res.final.Q4.1$log2FoldChange
+
+# name the vector
+names(genelist_ensembl.Q4.1) <- res.final.Q4.1$ENSEMBL
+names(genelist_entrezid.Q4.1) <- res.final.Q4.1$entrezid
+names(genelist_symbol.Q4.1) <- res.final.Q4.1$symbol
+
+
+de.Q4.1.1 <- as.data.frame(resSig.Q4.1) %>% 
+  dplyr::select(ENSEMBL, log2FoldChange) 
+head(de.Q4.1.1)
+
+sig_genes_Q4.1_df.1 <- de.Q4.1.1
+# From significant results, we want to filter on log2fold change
+siggenesQ4.1.1 <- sig_genes_Q4.1_df.1$log2FoldChange
+siggenesQ4.1.1
+# Name the vector
+names(siggenesQ4.1.1) <- sig_genes_Q4.1_df.1$ENSEMBL
+names(siggenesQ4.1.1)
+
+### GSEA Analysis using REACTOME
+
+ library(clusterProfiler)
+library(msigdbr)
+
+m_df <- msigdbr(species = "Homo sapiens")
+print(msigdbr_collections(), n = 25)
+
+
+c2t2g <- msigdbr(species = "human", category = "C2", subcategory = "CP:REACTOME") %>%
+  dplyr::select(gs_name, ensembl_gene)
+head(c2t2g)
+  
+c2gsea.Q4.1.1 <- GSEA(genelist_ensembl.Q4.1, TERM2GENE = c2t2g,
+                    minGSSize = 10,
+                    maxGSSize = 1500,
+                    pvalueCutoff = 0.1,
+                    pAdjustMethod = "BH",
+                    nPerm = 1000,
+                    by = "DOSE"
+)
+
+
+c2gsea.Q4.1.1gseasummary <- as.data.frame(c2gsea.Q4.1.1)
+
+## drop "Reactome" from Description character string
+results.Q4_df <- c2gsea.Q4.1.1@result
+# Remove the "REACTOME_" prefix from the "Description" column
+results.Q4_df$Description <- sub("^REACTOME_", "", results.Q4_df$Description)
+# Update the gseaResult object with the modified results
+c2gsea.Q4.1.1@result <- results.Q4_df  
+
+#subset GSEA analysis
+c2gsea.Q4.2 <- c2gsea.Q4.1.1
+c2gsea.Q4.2@result <- c2gsea.Q4.2[c(1,2,3,4,5,7,9,10,12,14),]
+
+subset_Q4_R <- dotplot(c2gsea.Q4.2, label_format = 35) + ggtitle("Reactome") +
+  theme(plot.title = element_text(hjust=0.5)) + theme(plot.title = element_text(size = 20)) + 
+  theme( plot.title = element_text(face = "bold")) +
+  theme(axis.text.x=element_text(size=12, color = "black")) + 
+  theme(axis.title.x=element_text(size=12, color = "black")) +
+  theme(axis.text.y=element_text(size=14, color = "black")) +
+  theme(panel.border = element_rect(color = "black", size = 1, fill = NA)) + # adjust size for border thickness
+  scale_fill_gradientn(colors = c("azure1", "dodgerblue", "navy"),     # Customize color range
+    name = "p.adjust",                       # Legend title
+    limits = c(0, 0.1),             # Adjust to fit your p-value range
+    breaks = c(0.01, 0.05, 0.1),            # Ensure breaks and labels match
+    labels = c("0.01", "0.05", "0.1")) + 
+  theme(legend.position = "right")
+
+subset_Q4_R
+Figure1D <- subset_Q4_R
+ggsave("Figure1D.png", plot = Figure1D, width = 8.577326, height = 7.719568, units = "cm", 
+       device = "png", dpi = 1200, scale = 2)
+dev.off()
+
+
+###   GSEA Analysis using GO Biological Process  
+
+library(msigdbr)
+m_df <- msigdbr(species = "Homo sapiens")
+print(msigdbr_collections(), n = 25)
+
+c5t2g <- msigdbr(species = "human", category = "C5", subcategory = "GO:BP") %>%
+  dplyr::select(gs_name, entrez_gene, ensembl_gene)
+head(c5t2g)
+c5gsea.Q4.1.1 <- GSEA(genelist_ensembl.Q4.1, TERM2GENE = c5t2g,
+                    minGSSize = 10,
+                    maxGSSize = 1500,
+                    pvalueCutoff = 0.1,
+                    pAdjustMethod = "BH",
+                    nPerm = 1000,
+                    by = "DOSE"
+)
+  
+c5gsea.Q4.1.1gseasummary <- as.data.frame(c5gsea.Q4.1.1)
+
+## drop "GOBP" from Description character string
+BPresults.Q4_df.1 <- c5gsea.Q4.1.1@result
+# Remove the "REACTOME_" prefix from the "Description" column
+BPresults.Q4_df.1$Description <- sub("^GOBP_", "", BPresults.Q4_df.1$Description)
+# Update the gseaResult object with the modified results
+c5gsea.Q4.1.1@result <- BPresults.Q4_df.1
+
+
+#subset GSEA results
+c5gsea.Q4.2 <- c5gsea.Q4.1.1 
+c5gsea.Q4.2@result <- c5gsea.Q4.2[c(1,2,3,4,5,7,8,9,11,13),]
+
+
+library(ggplotify)
+
+dotplot(c5gsea.Q4.2)
+subset_Q4_BP <- dotplot(c5gsea.Q4.2, label_format = 30) + ggtitle("GO Biological Process") + 
+  theme(plot.title = element_text(hjust=0.5)) + theme(plot.title = element_text(size = 18)) + 
+  theme( plot.title = element_text(face = "bold")) +
+  theme(axis.text.x=element_text(size=12, color = "black")) + 
+  theme(axis.title.x=element_text(size=12, color = "black")) +
+  theme(axis.text.y=element_text(size=14, color = "black")) +
+  theme(panel.border = element_rect(color = "black", size = 1, fill = NA)) + # adjust size for border thickness
+  scale_fill_gradientn(colors = c("azure1", "dodgerblue", "navy"),     # Customize color range
+                       name = "p.adjust",                       # Legend title
+                       limits = c(0, 0.1),             # Adjust to fit your p-value range
+                       breaks = c(0.01, 0.05, 0.1),            # Ensure breaks and labels match
+                       labels = c("0.01", "0.05", "0.1")) 
+subset_Q4_BP
+
+###save plot
+Figure1C <- subset_Q4_BP
+
+ggsave("Figure1C.png", plot = Figure1C, width = 20, height = 18, units = "cm", 
+       device = "png", dpi = 1200) #scaling = 0.25)
+
+
+
+
+###------------------ pathfindR analysis -----------------------###
+ # Figures 1E-F
+
+library("pathfindR")
+library("devtools")
+library("dplyr")
+
+# create dataframe containing symbol, log2FoldChange, and pvalue
+sig_genes_df_Q4 <- resSig.Q4.1 %>% select("symbol", "log2FoldChange", "padj")
+
+# default iterations (10)
+pathfindR_output <- run_pathfindR(sig_genes_df_Q4)
+ 
+### Clustering of Enriched Terms
+# default settings
+clustered_df <- cluster_enriched_terms(pathfindR_output)
+
+# plotting only selected clusters for better visualization
+library(ggh4x)
+library(ggpubr)
+
+selected_clusters <- subset(clustered_df, Cluster %in% 1:3)
+enrichment <- enrichment_chart(selected_clusters, plot_by_cluster = TRUE) + 
+  theme(axis.text.y = element_text(color = "black", size = 14), 
+axis.text.x = element_text(color = "black", size = 12), axis.title.x = element_text(color = "black", face = 1, size = 14)) + 
+  theme(legend.position="bottom") +
+  theme(legend.text = element_text(size=8)) + 
+  theme(legend.title = element_text(size=9, face = 1, color = "black")) +
+  theme(legend.key.size = unit(0.4, 'cm')) +
+scale_y_discrete(labels = scales::label_wrap(32)) +
+  theme(panel.border = element_rect(color = "black", size = 1, fill = NA), # Border around each panel
+        strip.background = element_rect(color = "black", size = 1.5), # Thicker border around facet headers
+        strip.text = element_text(size = 10, face = 2) # Increase size for facet header text
+  )
+
+# save plot
+Figure1E <- enrichment
+ggsave("Figure1E.png", plot = Figure1E, width = 4.5, height = 6, units = "cm", 
+       device = "png", dpi = 1200, scale = 3)
+dev.off()
+
+  
+#Term-Gene Graph
+library(dplyr)
+library(ggraph)
+library(igraph)
+term_gene_graph1 <- term_gene_graph(clustered_df, num_terms = 3, use_description = TRUE) 
+
+term_gene_graph1 + 
+  scale_color_manual(values = c("term" = "bisque2", "up" = "orangered", "down" = "dodgerblue")) +
+  geom_node_text(aes(label = ifelse("gene", .data$name, "")))
+
+term_gene_graph2 <- term_gene_graph1 + theme(legend.position="none") + 
+  scale_color_manual(values = c("term" = "bisque2", "up" = "orangered", "down" = "dodgerblue")) +
+  geom_node_text(aes(label = ifelse("gene", .data$name, "")))
+
+term_gene_graph2
+
+
+Figure1F <- term_gene_graph2
+ggsave("Figure1F.png", plot = Figure1F, width = 7, height = 5, units = "cm", 
+       device = "png", dpi = 1200, scale = 3.5)
+dev.off()  
+  
+  
+  
+  
