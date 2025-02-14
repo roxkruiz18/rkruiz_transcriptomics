@@ -151,11 +151,10 @@ write.csv(combined_TPM_PAAD_Q1, "TPM_counts_PLEC_Q2_samples.csv")
 
 library("reshape2")
 
-all.results <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/combined_CIBERSORTx_results_all_samples.csv", row.names = 1, header = TRUE)
-#Q1.Q4 <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/CIBERSORTx_results_Q1_Q4.csv", row.names = 1, header = TRUE)
-#all.sample.Qs <- read.csv("C:/Users/roxkr/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/Quartile_Sample_names.csv", header = TRUE)
-#Q1.Q4_samples <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/Quartile1_4_Sample_names.csv", header = TRUE)
-samples.Qs.3 <- samples.Qs.2 %>% rename("ID" = "variable")
+all.results <- read.csv("C:/X/X/X/X/X/Quartile Data/Matrix Files/combined_CIBERSORTx_results_all_samples.csv", row.names = 1, header = TRUE)
+#Q1.Q4 <- read.csv("C:/X/X/X/X/X/p/TCGA-PAAD/Quartile Data/Matrix Files/CIBERSORTx_results_Q1_Q4.csv", row.names = 1, header = TRUE)
+#all.sample.Qs <- read.csv("C://X/X/X/X/X//TCGA-PAAD/Quartile Data/Matrix Files/Quartile_Sample_names.csv", header = TRUE)
+#Q1.Q4_samples <- read.csv("C:/X/X/X/X/X//TCGA-PAAD/Quartile Data/Matrix Files/Quartile1_4_Sample_names.csv", header = TRUE)
 subset <- as.factor(c("B.cells.naive", "B.cells.memory", "Plasma.cells", "CD4.naive.T.cells", "CD4.memory.resting", "CD4.memory.activated",
             "Tregs", "T.cells.follicular.helper", "T.cells.gamma.delta", "CD8.T.cells", "Monocytes", "Macrophages.M0", "Macrophages.M1",
             "Macrophages.M2", "Dendritic.cells.resting", "Dendritic.cells.activated", "Neutrophils", "Mast.cells.resting", "Mast.cells.activated", 
@@ -209,7 +208,7 @@ write.csv(all_data_all.results_long, "All_Qs_CIBERSORTx_results3.csv")
 
 
 
-All.Qs.relative <-read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/All_Qs_CIBERSORTx_results2.csv")
+All.Qs.relative <-read.csv("C://X/X/X/X/X//TCGA-PAAD/Quartile Data/All_Qs_CIBERSORTx_results2.csv")
 
 
 library(car)
@@ -353,10 +352,10 @@ library("reshape2")
 
 
 
-all.results.ABS <- read.csv("C:/Users/roxkr/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/CIBERSORTx_Q1234_ABS_results.csv", row.names = 1, header = TRUE)
-#Q1.Q4.ABS <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/CIBERSORTx_Q1_Q4_ABS_results.csv", row.names = 1, header = TRUE)
-#all.sample.Qs <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/Quartile_Sample_names.csv", header = TRUE)
-#Q1.Q4_samples <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/Matrix Files/Quartile1_4_Sample_names.csv", header = TRUE)
+all.results.ABS <- read.csv("C:/X/X/X/X/X//TCGA-PAAD/Quartile Data/Matrix Files/CIBERSORTx_Q1234_ABS_results.csv", row.names = 1, header = TRUE)
+#Q1.Q4.ABS <- read.csv("C:/X/X/X/X/X/TCGA-PAAD/Quartile Data/Matrix Files/CIBERSORTx_Q1_Q4_ABS_results.csv", row.names = 1, header = TRUE)
+#all.sample.Qs <- read.csv("C:/X/X/X/X/X/TCGA-PAAD/Quartile Data/Matrix Files/Quartile_Sample_names.csv", header = TRUE)
+#Q1.Q4_samples <- read.csv("C:/X/X/X/X/X/TCGA-PAAD/Quartile Data/Matrix Files/Quartile1_4_Sample_names.csv", header = TRUE)
 
 
 all.results.ABS <- rownames_to_column(all.results.ABS, "Sample")
@@ -389,7 +388,7 @@ all_data_allQs.ABS_long  <- merge(all.Qs.ABS_long, samples.Qs.3, by = "variable"
 write.csv(all_data_allQs.ABS_long, "All_Qs_ABS_CIBERSORTx_results2.csv")
 
 
-all.ABS <- read.csv("C:/Users/bandg/OneDrive/Desktop/TCGA-PAAD/Quartile Data/All_Qs_ABS_CIBERSORTx_results2.csv")
+all.ABS <- read.csv("C:/X/X/X/X/X//TCGA-PAAD/Quartile Data/All_Qs_ABS_CIBERSORTx_results2.csv")
 
 #all_data_allQs.ABS_long <- all_data_allQs.ABS_long %>% rename("Quartile" = "quartile")
 
