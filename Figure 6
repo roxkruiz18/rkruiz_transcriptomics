@@ -22,9 +22,9 @@ library(UCell)
 #```{r}
 library(data.table)
 # Read in scRNAseq data
-Elyada.data <- read.csv("C://x/x/x/x//scRNAseq/Tuveson_dataset/1_human_combined-20240626T172447Z-001/1_human_combined/human_combined_expression.csv", header = TRUE)
+Elyada.data <- read.csv("C:/human_combined_expression.csv", header = TRUE)
 # Read in table for Ensembl  name to symbol name
-gene_symbol <- read.table("C:/x/x/x/x//scRNAseq/Tuveson_dataset/1_human_combined-20240626T172447Z-001/1_human_combined/human_combined_matrix_files/genes.tsv")
+gene_symbol <- read.table("C:/human_combined_matrix_files/genes.tsv")
 
 # Select out only ductal cells
 Non_adjacent <- !grepl("9|7", colnames(Elyada.data))
@@ -47,7 +47,7 @@ All.genes <- subset(All.genes, select = -gene)
 #```
 #```{r}
 #Add in cell annotations
-barcodes <- read.csv("C:/x/x/x/x/scRNAseq/Tuveson_dataset/1_human_combined-20240626T172447Z-001/1_human_combined/human_combined_tsne_annotation.csv")
+barcodes <- read.csv("C:/human_combined_tsne_annotation.csv")
 
 cell_annot <- barcodes[,-c(2,3,4,5)]
 
@@ -137,12 +137,12 @@ DimPlot(sdata, reduction = "umap", group.by = "cluster_name")
 #```{r}
 #Looks good so we can save the file
 #saveRDS
-saveRDS(sdata, file = "C:/x/x/x/x/scRNAseq/Tuveson_dataset/Elyada_seurat_object_combined.rds")
+saveRDS(sdata, file = "C:/Elyada_seurat_object_combined.rds")
 
-sdata <- readRDS("C:/Users/roxkr/OneDrive/Desktop/scRNAseq/Tuveson_dataset/Elyada_seurat_object_combined.rds")
+sdata <- readRDS("C:/Elyada_seurat_object_combined.rds")
 #Load in seurat data
 #```{r}
-sdata <- readRDS("C:/x/x/x/x//scRNAseq/Tuveson_dataset/Elyada_seurat_object_combined.rds")
+sdata <- readRDS("C:/Elyada_seurat_object_combined.rds")
 Idents(object = sdata) <- sdata@meta.data$cluster_name
 
 ####----------------- 
@@ -221,7 +221,7 @@ ductal.gsea <- runEscape(ductal,
                         min.size = 5,
                         new.assay.name = "escape.Biocarta")
 
-saveRDS(ductal.gsea, file = "C:/Users/roxkr/OneDrive/Desktop/scRNAseq/Tuveson_dataset/ductal_cell_seurat_escape_analysis.rds")
+saveRDS(ductal.gsea, file = "C:/ductal_cell_seurat_escape_analysis.rds")
 
 ### visualization of genesets with a LFC of +/- 2
 
@@ -370,7 +370,7 @@ Figure.6D
 ggsave("Figure.6D", plot = Figure.6D, device = "png")
 
 
-saveRDS(cellchat, file = "C:/x/x/x/x/scRNAseq/Tuveson_dataset/Elyada_cellchat_object_updated3.rds")
+saveRDS(cellchat, file = "C:/Elyada_cellchat_object_updated3.rds")
 
 
 #####get laminin-332 violin plots
