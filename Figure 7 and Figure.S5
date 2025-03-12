@@ -182,7 +182,7 @@ DimPlot(sdata.1, reduction = "umap", group.by = "cluster_name")
 #Looks good so we can save the file
 
 
-saveRDS(sdata.1, file = "C:/x/x/x/x/scRNAseq/Tuveson_dataset/sdata.1_RR.rds")
+saveRDS(sdata.1, file = "C:/sdata.1_RR.rds")
 Idents(object = sdata.1) <- sdata.1@meta.data$cluster_name
 
 
